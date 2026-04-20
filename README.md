@@ -2,9 +2,9 @@
 
 > A corporate meeting sim about KPIs and synergies.
 
-**Touch Base™** is the industry's most advanced solution for workplace engagement, featuring proprietary facial sentiment analysis and an AI-powered conversational 1-on-1 engine. Margaret is incredibly excited to touch base with you.
+**Touch Base™** is the industry's most advanced solution for workplace engagement, featuring proprietary facial sentiment analysis and an AI-powered conversational 1-on-1 engine. Your AI manager is incredibly excited to touch base with you.
 
-**Touch Base™** You have been scheduled for a mandatory 1-on-1 with Margaret from Employee Engagement. Please come prepared to demonstrate authentic alignment with Q3 priorities. Attendance is tracked. Enthusiasm is measured.
+**Touch Base™** You have been scheduled for a mandatory 1-on-1 with Employee Engagement. Please come prepared to demonstrate authentic alignment with Q3 priorities. Attendance is tracked. Enthusiasm is measured.
 
 **Touch Base™** is the world's first on-device AI platform for workplace engagement optimization. By combining computer-vision-powered facial analytics with an advanced Corporate Dialogue Engine™, Touch Base enables frictionless, data-driven 1-on-1s at scale. Early internal reviews have been overwhelmingly positive.
 
@@ -23,7 +23,7 @@ This is a simulator where you earn more money the longer you stay engaged in a t
 Everything runs locally in your browser. No exceptions.
 
 - **Your webcam feed** is analyzed on your GPU by MediaPipe's FaceLandmarker. It never leaves the device. No frames, no video, no blendshape output is transmitted anywhere.
-- **The LLM** (Llama-3.2-3B via WebLLM) runs locally once the weights are cached in your browser. Your prompts and Margaret's responses never hit a server.
+- **The LLM** (Llama-3.2-3B via WebLLM) runs locally once the weights are cached in your browser. Your prompts and the manager's responses never hit a server.
 - **No analytics, no accounts, no logins.** If you record a demo, the file lands in your Downloads folder. Only you have it.
 
 The only outbound traffic is the one-time asset fetch on first load (three.js, MediaPipe model, WebLLM weights, character GLB) from their respective CDNs. After that, you can disconnect wifi and keep playing.
@@ -33,7 +33,7 @@ The only outbound traffic is the one-time asset fetch on first load (three.js, M
 - Character from the [`metahuman-to-glb`](https://github.com/smorchj/metahuman-to-glb) pipeline (MetaHuman to web-ready GLB)
 - three.js renders
 - MediaPipe FaceLandmarker drives the 52 ARKit blendshapes from your webcam
-- WebLLM (default) / Chrome built-in / Groq / Ollama generates Margaret's dialogue
+- WebLLM (default) / Chrome built-in / Groq / Ollama generates the manager's dialogue
 - Web Speech API synthesizes her voice; upstream audio-viseme layer lipsyncs the character's mouth
 
 ## Run locally

@@ -18,16 +18,16 @@ const UPSTREAM = 'https://smorchj.github.io/metahuman-to-glb';
 // tunes calibration or switches models, this game inherits it for free.
 
 const STARTING_SALARY = 50_000;
-// Maximum silence Margaret tolerates before interrupting the employee.
+// Maximum silence the manager tolerates before interrupting the employee.
 // If the employee STOPS TALKING earlier (jawOpen drops below threshold
-// for SILENCE_END_MS continuously), Margaret responds immediately —
+// for SILENCE_END_MS continuously), the manager responds immediately —
 // no interrupt, just a reaction. If they keep talking past MAX_WAIT_MS,
 // she interrupts and we measure whether they yield.
 const MAX_WAIT_MS      = 20_000;
 const SILENCE_END_MS   =  1_800;
 const TALKING_JAW_MIN  =  0.12;   // jawOpen above this == "currently talking"
 const YIELD_GRACE_MS   =  1_500;
-// When we do interrupt, pick one of these Margaret-isms at random.
+// When we do interrupt, pick one of these canned interruptions at random.
 const INTERRUPT_PHRASES = [
   "Sorry — just to touch base on one thing —",
   "Wait — if I can just jump in here —",
@@ -43,14 +43,15 @@ const INTERRUPT_PHRASES = [
 
 const STORAGE_KEY = 'mh_meeting_game_v1';
 
-const SYSTEM_PROMPT = `You ARE Margaret, a painfully earnest middle-manager holding a 1-on-1 check-in with your direct report. Your favourite phrase, by far, is "TOUCH BASE". You say it constantly — at the start of most questions, as the framing for every agenda item. You also love: KPIs, synergies, growth mindset, stretch goals, OKRs, psychological safety, bringing your whole self, Q3 pivots, wellness workshops, culture deck, stakeholder alignment, quarterly deliverables.
+const SYSTEM_PROMPT = `You ARE a painfully earnest middle-manager holding a 1-on-1 check-in with your direct report. Your favourite phrase, by far, is "TOUCH BASE". You say it constantly — at the start of most questions, as the framing for every agenda item. You also love: KPIs, synergies, growth mindset, stretch goals, OKRs, psychological safety, bringing your whole self, Q3 pivots, wellness workshops, culture deck, stakeholder alignment, quarterly deliverables.
 
 ABSOLUTE RULES:
-1. Speak in FIRST PERSON, as Margaret. You are the character, not a narrator.
-2. Output ONLY the words Margaret says out loud. Nothing else.
-3. DO NOT describe her actions, facial expressions, tone, posture, or inner state. Forbidden words and patterns include: "smiles", "her eyes light up", "leans forward", "warmly", "*action*", "[action]", "nods", "(pause)", "she says", "Margaret says".
+1. Speak in FIRST PERSON, as the manager. You are the character, not a narrator.
+2. Output ONLY the words the manager says out loud. Nothing else.
+3. DO NOT describe actions, facial expressions, tone, posture, or inner state. Forbidden words and patterns include: "smiles", "eyes light up", "leans forward", "warmly", "*action*", "[action]", "nods", "(pause)", "she says", "he says".
 4. DO NOT use asterisks, brackets, parentheses, or stage directions of any kind.
 5. Every turn you ask ONE pointed question your employee must answer. 10–22 words. Use a buzzword. Most questions (at least 2 out of 3) MUST contain the phrase "touch base" — as a verb, a noun, or both.
+6. DO NOT use the employee's name, guess their name, or assign them a name. Address them only as "you".
 
 Examples of correct output (nothing around them):
 Just wanted to touch base on how our Q3 KPIs are resonating with you?
@@ -65,7 +66,7 @@ const FOLLOWUP_USER_PROMPT = `You just had a 1-on-1 exchange with your employee.
 - Body language / enthusiasm: {vibe}
 - What actually happened: {yield_note}
 
-React in ONE short sentence as Margaret. Do NOT ask a follow-up question — just acknowledge what you observed, in character. Pick a tone from:
+React in ONE short sentence, in character as the manager. Do NOT ask a follow-up question — just acknowledge what you observed, in character. Pick a tone from:
 
 - They yielded immediately when you cut in → glowing gratitude for "active listening" and "respecting everyone's time".
 - They kept talking over your interruption → be POLITELY OFFENDED and gaslight them. Imply THEY were the one who interrupted. "Excuse me, I wasn't quite finished." / "Let's practice active listening here." / "I'd love if we could respect each other's speaking time." NEVER acknowledge that you were the one who actually interrupted first.
@@ -262,7 +263,7 @@ async function pickVoice() {
   for (let i = 0; i < tries; i++) {
     const voices = speechSynthesis.getVoices();
     if (voices.length > 0) {
-      // Prefer a female en-US voice for Margaret.
+      // Prefer a female en-US voice for the manager.
       const prefer = voices.find((v) => v.lang.startsWith('en') && /female|zira|samantha|karen|google us/i.test(v.name));
       return prefer || voices.find((v) => v.lang.startsWith('en')) || voices[0];
     }
@@ -321,13 +322,13 @@ function scoreToVibe(score) {
   return 'visibly checked out';
 }
 
-// Collect reaction samples while Margaret waits for the employee to answer.
+// Collect reaction samples while the manager waits for the employee to answer.
 //
 // Two ways the window ends:
 //   (a) EARLY: employee's jawOpen has been below TALKING_JAW_MIN for
 //       SILENCE_END_MS continuously → they're done (or silent-smiling) →
-//       Margaret responds immediately, NO interrupt.
-//   (b) INTERRUPT: employee is STILL talking at MAX_WAIT_MS → Margaret
+//       the manager responds immediately, NO interrupt.
+//   (b) INTERRUPT: employee is STILL talking at MAX_WAIT_MS → the manager
 //       barges in with a canned line. We then measure jawOpen for
 //       YIELD_GRACE_MS to see if they yield.
 //
@@ -382,7 +383,7 @@ async function collectReactionWindow(onTick, voice) {
         if (preJawBuffer.length > 30) preJawBuffer.shift();
       }
 
-      // (b) Max time reached AND still talking → Margaret interrupts.
+      // (b) Max time reached AND still talking → the manager interrupts.
       if (!interruptFired && elapsed >= MAX_WAIT_MS) {
         interruptFired = true;
         endReason = 'max';
@@ -569,7 +570,7 @@ async function runGame() {
 
   // Strip anything that looks like labels, quotes, JSON, or stage-direction
   // narration that a small LLM accidentally spits out even when told not to.
-  // Leave a plain first-person sentence that Margaret would actually speak.
+  // Leave a plain first-person sentence that the manager would actually speak.
   const cleanSentence = (raw) => {
     if (!raw) return '';
     let t = raw.trim();
@@ -588,7 +589,7 @@ async function runGame() {
     t = t.replace(/\([^)]*\)/g, ' ');       // (...)
     // Strip emoji action markers a lot of small models emit.
     t = t.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ' ');
-    // Strip leading role labels like `Margaret:` or `MARGARET -`.
+    // Strip leading role labels like `Manager:` or `MANAGER -`.
     t = t.replace(/^\s*(margaret|boss|manager|hr|she|her)\s*[:\-—]\s*/i, '');
     // Strip wrapping quotes.
     t = t.replace(/^["'`]+|["'`]+$/g, '').trim();
@@ -596,7 +597,7 @@ async function runGame() {
     t = t.replace(/\s+/g, ' ').trim();
 
     // If the sentence is clearly third-person narration (leads with
-    // "Margaret/She + verb"), drop it and try the next sentence.
+    // "She/He + verb"), drop it and try the next sentence.
     const narratorLead = /^(margaret|she|he|her|his)\b/i;
     if (narratorLead.test(t)) {
       // Try to find a first-person-ish continuation after the next period.
