@@ -14,6 +14,10 @@
   </a>
 </p>
 
+## How long can you last in a corporate meeting?
+
+This is a simulator where you earn more money the longer you stay engaged in a typical corporate meeting.
+
 ## Privacy
 
 Everything runs locally in your browser. No exceptions.
