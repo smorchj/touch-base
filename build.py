@@ -1,4 +1,4 @@
-"""Build script — copy src/* into site/ with a cache-bust token."""
+"""Build script — copy src/* into docs/ with a cache-bust token."""
 from __future__ import annotations
 
 import argparse
@@ -15,13 +15,13 @@ def _render(template: str, replacements: dict) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", default=".", help="Repo root (where src/ + site/ live)")
+    ap.add_argument("--root", default=".", help="Repo root (where src/ + docs/ live)")
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
     src = root / "src"
-    site = root / "site"
-    site.mkdir(parents=True, exist_ok=True)
+    out = root / "docs"
+    out.mkdir(parents=True, exist_ok=True)
 
     built_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
     vars_ = {
@@ -31,11 +31,11 @@ def main() -> int:
 
     for name in ("index.html", "game.js", "style.css"):
         srcf = src / name
-        dstf = site / name
+        dstf = out / name
         dstf.write_text(_render(srcf.read_text(encoding="utf-8"), vars_), encoding="utf-8")
         print(f"[build] {dstf.relative_to(root)}")
 
-    print(f"[build] published -> {site.relative_to(root)}/ (cache bust: {vars_['cache_bust']})")
+    print(f"[build] published -> {out.relative_to(root)}/ (cache bust: {vars_['cache_bust']})")
     return 0
 
 

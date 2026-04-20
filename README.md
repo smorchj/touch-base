@@ -36,7 +36,7 @@ The only outbound traffic is the one-time asset fetch on first load (three.js, M
 
 ```bash
 python build.py
-python -m http.server 8001 -d site
+python -m http.server 8001 -d docs
 # open http://localhost:8001/
 ```
 
