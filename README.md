@@ -47,7 +47,7 @@ python -m http.server 8001 -d docs
 
 ## This is not a training tool
 
-If you're an HR director reading this and your first thought was "this would be great for our engagement workshops", touch grass. Touch Base is a satire of workplace monitoring, not an implementation of it. No employees were retained, evaluated, or psychologically conditioned in the making of this game. Deploying it in actual 1-on-1s is both missing the point and, depending on your jurisdiction, illegal.
+If you're an HR director reading this and your first thought was "this would be great for our engagement workshops", u need to go to the doctor and go get checked for delulu. Touch Base is a satire of workplace monitoring, not an implementation of it. No employees were retained, evaluated, or psychologically conditioned in the making of this game. Deploying it in actual 1-on-1s is both missing the point and, depending on your jurisdiction, illegal.
 
 ## License
 
