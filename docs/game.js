@@ -241,18 +241,8 @@ async function speak(text, voice, { watchInterrupt = false } = {}) {
     }
 
     const cleanup = () => { if (pollId) clearInterval(pollId); };
-    const bounceSTT = () => {
-      // Ensure SR is listening again once TTS is out of the way.
-      if (!_sttInstance) return;
-      _sttInstance.__wantRunning = true;
-      try { _sttInstance.stop(); } catch {}
-      setTimeout(() => {
-        try { _sttInstance.start(); console.log('[game][stt] post-speak restart'); }
-        catch (e) { console.log('[game][stt] post-speak restart threw (likely already running):', e.message); }
-      }, 120);
-    };
-    u.onend = () => { cleanup(); bounceSTT(); resolve({ interrupted }); };
-    u.onerror = () => { cleanup(); bounceSTT(); resolve({ interrupted }); };
+    u.onend = () => { cleanup(); resolve({ interrupted }); };
+    u.onerror = () => { cleanup(); resolve({ interrupted }); };
     try { speechSynthesis.cancel(); } catch {}
     speechSynthesis.speak(u);
   });
@@ -411,6 +401,14 @@ async function collectReactionWindow(onTick, voice, sttStartIndex) {
   // Track whether STT has heard any words since the window opened.
   const windowStartAt = performance.now();
   let lastTalkingAt = -1;        // performance.now() of most recent "talking" frame
+
+  // SR heartbeat: if it's not currently running, try to start it.
+  // Chrome sometimes pauses SR during TTS and doesn't resume on its own.
+  const heartbeat = setInterval(() => {
+    if (!_sttInstance) return;
+    _sttInstance.__wantRunning = true;
+    try { _sttInstance.start(); } catch {}
+  }, 1000);
   let firstTalkingAt = -1;        // first time they opened their mouth
   let talkingAccumMs = 0;         // cumulative "talking" time
   let interruptFired = false;
@@ -449,6 +447,7 @@ async function collectReactionWindow(onTick, voice, sttStartIndex) {
       const sttQuietFor = _sttLastActivityAt > 0 ? (now - _sttLastActivityAt) : elapsed;
       if (hasSpoken && sttQuietFor >= SPEECH_SILENCE_END_MS && !interruptFired) {
         endReason = 'speech-silence';
+        clearInterval(heartbeat);
         return resolve();
       }
       // Secondary fallback: if mic/STT failed entirely (Firefox etc.) and
@@ -456,6 +455,7 @@ async function collectReactionWindow(onTick, voice, sttStartIndex) {
       const silentSince = lastTalkingAt > 0 ? (now - lastTalkingAt) : elapsed;
       if (!hasSpoken && elapsed > 4000 && silentSince >= SILENCE_END_MS && !interruptFired) {
         endReason = 'jaw-silence';
+        clearInterval(heartbeat);
         return resolve();
       }
 
@@ -478,7 +478,7 @@ async function collectReactionWindow(onTick, voice, sttStartIndex) {
           console.log('[game][interrupt] baseline=%s post=%s → yielded=%s', baselineJaw.toFixed(2), postJaw.toFixed(2), yielded);
         }, YIELD_GRACE_MS);
         // Let the grace window play out before resolving.
-        setTimeout(() => resolve(), YIELD_GRACE_MS + 200);
+        setTimeout(() => { clearInterval(heartbeat); resolve(); }, YIELD_GRACE_MS + 200);
         return;
       }
 
