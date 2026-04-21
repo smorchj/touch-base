@@ -241,8 +241,19 @@ async function speak(text, voice, { watchInterrupt = false } = {}) {
     }
 
     const cleanup = () => { if (pollId) clearInterval(pollId); };
-    u.onend = () => { cleanup(); resolve({ interrupted }); };
-    u.onerror = () => { cleanup(); resolve({ interrupted }); };
+    const kickSTT = () => {
+      // After TTS ends, make sure SR is listening. start() throws if
+      // already running (interrupt case); we swallow that. If SR was
+      // stopped by Chrome during TTS output, this kicks it back on.
+      if (!_sttInstance) return;
+      _sttInstance.__wantRunning = true;
+      setTimeout(() => {
+        try { _sttInstance.start(); console.log('[game][stt] post-speak kick-start (ok)'); }
+        catch (e) { console.log('[game][stt] post-speak kick-start:', e.message); }
+      }, 80);
+    };
+    u.onend = () => { cleanup(); kickSTT(); resolve({ interrupted }); };
+    u.onerror = () => { cleanup(); kickSTT(); resolve({ interrupted }); };
     try { speechSynthesis.cancel(); } catch {}
     speechSynthesis.speak(u);
   });
