@@ -2,7 +2,7 @@
 // Ties together:
 //   - upstream MetaHuman viewer (character rendering)
 //   - MediaPipe FaceLandmarker (player enthusiasm scoring)
-//   - swappable LLM backends (Chrome built-in / Groq / WebLLM / Ollama)
+//   - WebLLM (runs a Llama-3.2-3B locally via WebGPU)
 //   - Web Speech API (boss dialogue audio)
 
 import {
@@ -79,11 +79,7 @@ Never use the words "yield", "interrupt", "score", "enthusiasm", "vibe", or any 
 // ---------------- settings ----------------
 const defaultSettings = {
   character: 'ada',
-  backend: 'groq',
-  groqKey: '',
-  model: 'gemma2-9b-it',
-  apiUrl: '',
-  apiKey: '',
+  model: '',   // empty = use WebLLMClient default (Llama-3.2-3B MLC)
   rounds: 5,
 };
 
@@ -97,57 +93,7 @@ function saveSettings(s) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch {}
 }
 
-// ---------------- LLM client adapters ----------------
-// Common interface: client.complete(system, user) -> Promise<string>
-class ChromeBuiltinClient {
-  async init(settings) {
-    if (!('LanguageModel' in window || (window.ai && window.ai.languageModel))) {
-      throw new Error('Chrome built-in Prompt API not available. Try Chrome 127+ with the Prompt API flag.');
-    }
-    const LM = window.LanguageModel || window.ai.languageModel;
-    const availability = LM.availability ? await LM.availability() : 'readily';
-    if (availability === 'no') throw new Error('Chrome built-in model unavailable on this device.');
-    this.model = await LM.create({ systemPrompt: SYSTEM_PROMPT });
-  }
-  async complete(system, user) {
-    // Chrome's API carries systemPrompt at create-time. Fold any new system
-    // text into the user turn for follow-ups.
-    const combined = system === SYSTEM_PROMPT ? user : `${system}\n\n${user}`;
-    return await this.model.prompt(combined);
-  }
-  dispose() { try { this.model?.destroy?.(); } catch {} }
-}
-
-class OpenAICompatibleClient {
-  constructor({ url, key, model }) { this.url = url; this.key = key; this.model = model; }
-  async init() { /* no-op, per-request calls */ }
-  async complete(system, user) {
-    const res = await fetch(this.url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(this.key ? { Authorization: `Bearer ${this.key}` } : {}),
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-        temperature: 0.8,
-        max_tokens: 400,
-      }),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`LLM request failed ${res.status}: ${body.slice(0, 200)}`);
-    }
-    const data = await res.json();
-    return data.choices?.[0]?.message?.content || '';
-  }
-  dispose() {}
-}
-
+// ---------------- LLM client (WebLLM only — runs in-browser, no API keys) ----------------
 // Module-level cache so repeated Start clicks in the same tab reuse the
 // initialised engine instead of re-loading 1.5GB into GPU memory.
 let _cachedWebllm = null;
@@ -212,34 +158,7 @@ class WebLLMClient {
 }
 
 async function buildClient(settings, onProgress) {
-  let client;
-  if (settings.backend === 'chrome') {
-    client = new ChromeBuiltinClient();
-  } else if (settings.backend === 'groq') {
-    if (!settings.groqKey) throw new Error('Groq API key required. Open Settings and paste one.');
-    client = new OpenAICompatibleClient({
-      url: 'https://api.groq.com/openai/v1/chat/completions',
-      key: settings.groqKey,
-      model: settings.model || 'gemma2-9b-it',
-    });
-  } else if (settings.backend === 'ollama') {
-    client = new OpenAICompatibleClient({
-      url: 'http://localhost:11434/v1/chat/completions',
-      key: '',
-      model: settings.model || 'gemma3:12b',
-    });
-  } else if (settings.backend === 'openai') {
-    if (!settings.apiUrl) throw new Error('Custom backend needs an API URL.');
-    client = new OpenAICompatibleClient({
-      url: settings.apiUrl,
-      key: settings.apiKey,
-      model: settings.model,
-    });
-  } else if (settings.backend === 'webllm') {
-    client = new WebLLMClient();
-  } else {
-    throw new Error(`Unknown backend: ${settings.backend}`);
-  }
+  const client = new WebLLMClient();
   await client.init(settings, onProgress);
   return client;
 }
@@ -470,35 +389,18 @@ function updateMeter(score, progress) {
   $('#meter-timer').textContent = remaining.toFixed(1) + 's';
 }
 
-// Settings UI: show fields conditional on backend.
-function syncSettingsFields() {
-  const backend = $('#cfg-backend').value;
-  for (const f of document.querySelectorAll('#settings .field[data-for]')) {
-    const show = f.dataset.for.split(',').includes(backend);
-    f.style.display = show ? '' : 'none';
-  }
-}
 
 function openSettings() {
   const s = state.settings;
   $('#cfg-character').value = s.character;
-  $('#cfg-backend').value = s.backend;
-  $('#cfg-groq-key').value = s.groqKey;
   $('#cfg-model').value = s.model;
-  $('#cfg-url').value = s.apiUrl;
-  $('#cfg-api-key').value = s.apiKey;
   $('#cfg-rounds').value = s.rounds;
-  syncSettingsFields();
   showScreen('settings');
 }
 
 function closeSettingsSaving() {
   state.settings.character = $('#cfg-character').value;
-  state.settings.backend   = $('#cfg-backend').value;
-  state.settings.groqKey   = $('#cfg-groq-key').value.trim();
-  state.settings.model     = $('#cfg-model').value.trim() || defaultSettings.model;
-  state.settings.apiUrl    = $('#cfg-url').value.trim();
-  state.settings.apiKey    = $('#cfg-api-key').value.trim();
+  state.settings.model     = $('#cfg-model').value.trim();
   state.settings.rounds    = Math.max(1, Math.min(20, parseInt($('#cfg-rounds').value, 10) || 5));
   saveSettings(state.settings);
   showScreen('splash');
@@ -544,13 +446,9 @@ async function runGame() {
     setStatus('initialising face capture…');
     await initFaceCapture($('#viewer'), setStatus);
     setStatus('initialising LLM…');
-    if (state.settings.backend === 'webllm') showLoadingOverlay('Loading model…', 'First visit downloads ~1.5 GB. Cached after that.');
+    showLoadingOverlay('Loading model…', 'First visit downloads ~1.8 GB. Cached after that.');
     client = await buildClient(state.settings, (msg, pct) => {
-      if (state.settings.backend === 'webllm') {
-        updateLoadingOverlay(msg, pct);
-      } else {
-        setStatus(msg);
-      }
+      updateLoadingOverlay(msg, pct);
     });
     hideLoadingOverlay();
   } catch (err) {
@@ -714,18 +612,7 @@ function showFatalBanner(msg) {
     document.body.appendChild(banner);
   }
   const safe = msg.replace(/</g, '&lt;');
-  const backend = state.settings.backend;
-  let hint = '';
-  if (backend === 'groq') {
-    hint = `<br/><br/>Check your Groq key at <a href="https://console.groq.com/keys" target="_blank" rel="noopener" style="color:#ffd6de;text-decoration:underline">console.groq.com/keys</a>. A valid key starts with <code>gsk_</code>.`;
-  } else if (backend === 'chrome') {
-    hint = `<br/><br/>Chrome's built-in Prompt API isn't enabled here. Try switching <b>LLM backend</b> to <b>WebLLM</b> — runs locally via WebGPU, downloads the model on first visit, then works forever offline.`;
-  } else if (backend === 'webllm') {
-    hint = `<br/><br/>WebLLM needs WebGPU (Chrome/Edge/Arc) and the model download to succeed. Check devtools console for a specific failure.`;
-  } else if (backend === 'ollama') {
-    hint = `<br/><br/>Is Ollama running on this machine? Start it with <code>ollama serve</code>, and make sure you ran <code>OLLAMA_ORIGINS=* ollama serve</code> so the browser can reach it cross-origin.`;
-  }
-  banner.innerHTML = `<b>Meeting couldn't start.</b><br/>${safe}${hint}`;
+  banner.innerHTML = `<b>Meeting couldn't start.</b><br/>${safe}<br/><br/>WebLLM needs a WebGPU-capable browser (Chrome, Edge or Arc). Check the devtools console for the specific failure.`;
   banner.style.display = 'block';
   setTimeout(() => { if (banner) banner.style.display = 'none'; }, 45_000);
 }
@@ -778,7 +665,6 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#btn-settings').addEventListener('click', () => openSettings());
   $('#btn-settings-save').addEventListener('click', () => closeSettingsSaving());
   $('#btn-settings-cancel').addEventListener('click', () => showScreen('splash'));
-  $('#cfg-backend').addEventListener('change', syncSettingsFields);
   // End-screen buttons removed (infinite rounds now) — leaving listener
   // guards in case template still has the nodes.
   const again = $('#btn-again'); if (again) again.addEventListener('click', () => runGame());
