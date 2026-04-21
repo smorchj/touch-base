@@ -193,19 +193,53 @@ async function pickVoice() {
   return null;
 }
 
-async function speak(text, voice) {
+async function speak(text, voice, { watchInterrupt = false } = {}) {
   return new Promise((resolve) => {
-    if (!('speechSynthesis' in window)) return resolve();
+    if (!('speechSynthesis' in window)) return resolve({ interrupted: false });
     const u = new SpeechSynthesisUtterance(text);
     if (voice) u.voice = voice;
     u.rate = 1.02;
     u.pitch = 1.06;
-    u.onend = () => resolve();
-    u.onerror = () => resolve();
-    speechSynthesis.cancel();
+
+    let interrupted = false;
+    let pollId = 0;
+    if (watchInterrupt) {
+      const startBufferLen = _sttBuffer.length;
+      const startInterim = _sttInterim;
+      // Give the TTS a short head-start before arming interrupt detection —
+      // otherwise the player's previous-round trailing interim can trip it.
+      const armAt = performance.now() + 600;
+      pollId = setInterval(() => {
+        if (performance.now() < armAt) return;
+        const newFinal = _sttBuffer.length > startBufferLen;
+        const newInterim = _sttInterim && _sttInterim !== startInterim && _sttInterim.trim().length >= 2;
+        if (newFinal || newInterim) {
+          interrupted = true;
+          console.log('[game][tts] player interrupted — cancelling speech');
+          clearInterval(pollId);
+          try { speechSynthesis.cancel(); } catch {}
+        }
+      }, 120);
+    }
+
+    const cleanup = () => { if (pollId) clearInterval(pollId); };
+    u.onend = () => { cleanup(); resolve({ interrupted }); };
+    u.onerror = () => { cleanup(); resolve({ interrupted }); };
+    try { speechSynthesis.cancel(); } catch {}
     speechSynthesis.speak(u);
   });
 }
+
+// Canned snippy comebacks Margaret fires when the player talks over her.
+const SNAP_PHRASES = [
+  "Excuse me — I wasn't quite finished?",
+  "I — I'm going to finish my thought, thank you.",
+  "Can we let me complete my sentence, please?",
+  "Sorry, did you want to touch base, or should I keep talking?",
+  "Let's practice active listening. I was still speaking.",
+  "I appreciate your energy but I had the floor.",
+  "Mm — noting that you felt the need to jump in there.",
+];
 
 
 // ---------------- speech-to-text (Web Speech API) ----------------
@@ -634,11 +668,20 @@ async function runGame() {
       break;
     }
 
-    showBubble(topicLine);
-    await speak(topicLine, voice);
-
+    // Snapshot STT BEFORE she starts speaking so any interrupt the
+    // player makes mid-question still ends up in this round's transcript.
     const sttStartIndex = _sttBuffer.length;
     const sttStartInterim = _sttInterim;
+
+    showBubble(topicLine);
+    const { interrupted: aiInterrupted } = await speak(topicLine, voice, { watchInterrupt: true });
+    if (aiInterrupted) {
+      const snap = SNAP_PHRASES[Math.floor(Math.random() * SNAP_PHRASES.length)];
+      showBubble(snap);
+      // Don't watch for interrupt on the snap — she's already mad, she finishes.
+      await speak(snap, voice);
+    }
+
     showMeter();
     const { samples, yielded, interrupted, talkingSec } = await collectReactionWindow(
       (score, progress) => updateMeter(score, progress),
@@ -666,6 +709,8 @@ async function runGame() {
     // Yield modifiers (only when she actually interrupted).
     if (yielded === true)  delta += multiplier * 0.5;   // bonus for shutting up
     if (yielded === false) delta -= multiplier * 0.7;   // penalty for "interrupting her"
+    // Big penalty if you interrupted HER question mid-sentence.
+    if (aiInterrupted) delta -= multiplier * 0.9;
     updateSalary(delta);
     state.history.push({ topic: topicLine.split(/\s+/).slice(0, 6).join(' '), score: s.p50 });
 
@@ -688,12 +733,15 @@ async function runGame() {
 
     try {
       const transcriptForPrompt = transcript || '(nothing — they did not say anything)';
+      const talkNoteAug = aiInterrupted
+        ? 'THEY INTERRUPTED YOU while you were still asking the question — talked right over you. ' + talkNote
+        : talkNote;
       const raw = await client.complete(
         SYSTEM_PROMPT,
         FOLLOWUP_USER_PROMPT
           .replace('{transcript}', transcriptForPrompt.replace(/"/g, "'"))
           .replace('{vibe}', scoreToVibe(s.p50))
-          .replace('{yield_note}', talkNote),
+          .replace('{yield_note}', talkNoteAug),
       );
       const followup = cleanSentence(raw);
       if (followup) {
