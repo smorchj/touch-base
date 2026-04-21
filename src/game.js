@@ -216,39 +216,79 @@ async function speak(text, voice) {
 // will be empty (graceful fallback: LLM just reads body language).
 let _sttInstance = null;
 let _sttBuffer = [];
+let _sttInterim = '';
 function _makeSTT() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) return null;
+  if (!SR) {
+    console.warn('[game][stt] SpeechRecognition not available in this browser');
+    return null;
+  }
+  console.log('[game][stt] SpeechRecognition constructor ok');
   const r = new SR();
   r.continuous = true;
   r.interimResults = true;
   r.lang = 'en-US';
+  r.maxAlternatives = 1;
+  r.onstart  = () => { console.log('[game][stt] onstart'); setStatus('listening…'); };
+  r.onaudiostart  = () => console.log('[game][stt] onaudiostart');
+  r.onspeechstart = () => console.log('[game][stt] onspeechstart');
+  r.onspeechend   = () => console.log('[game][stt] onspeechend');
   r.onresult = (ev) => {
+    let interim = '';
     for (let i = ev.resultIndex; i < ev.results.length; i++) {
       const res = ev.results[i];
-      if (res.isFinal) _sttBuffer.push(res[0].transcript.trim());
+      const text = res[0].transcript.trim();
+      if (res.isFinal) {
+        console.log('[game][stt] final:', text);
+        _sttBuffer.push(text);
+      } else {
+        interim = text;
+      }
+    }
+    _sttInterim = interim;
+    const combined = (_sttBuffer.join(' ') + ' ' + interim).trim();
+    if (combined) setStatus('heard: ' + combined.slice(-80));
+  };
+  r.onerror = (ev) => {
+    console.warn('[game][stt] onerror:', ev.error, ev.message || '');
+    if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+      setStatus('mic/STT permission blocked: ' + ev.error);
     }
   };
-  r.onerror = (ev) => { if (ev.error !== 'no-speech' && ev.error !== 'aborted') console.warn('[game][stt]', ev.error); };
   r.onend = () => {
-    // SR likes to stop itself on silence; restart while we still want it.
-    if (r.__wantRunning) { try { r.start(); } catch {} }
+    console.log('[game][stt] onend (wantRunning=' + r.__wantRunning + ')');
+    if (r.__wantRunning) {
+      try { r.start(); console.log('[game][stt] auto-restarted'); } catch (e) { console.warn('[game][stt] auto-restart failed:', e.message); }
+    }
   };
   return r;
 }
 function startSTT() {
   if (!_sttInstance) _sttInstance = _makeSTT();
-  if (!_sttInstance) return;
+  if (!_sttInstance) { console.warn('[game][stt] no instance; skipping'); return; }
   _sttBuffer = [];
+  _sttInterim = '';
   _sttInstance.__wantRunning = true;
-  try { _sttInstance.start(); } catch {}
+  try {
+    _sttInstance.start();
+    console.log('[game][stt] start() called');
+  } catch (e) {
+    console.warn('[game][stt] start() threw:', e.message, '(may be already running — re-attempting shortly)');
+    // If already running, stop first then retry.
+    try { _sttInstance.stop(); } catch {}
+    setTimeout(() => {
+      try { _sttInstance.start(); console.log('[game][stt] retried start()'); } catch (e2) { console.warn('[game][stt] retry failed:', e2.message); }
+    }, 150);
+  }
 }
 function stopSTT() {
   if (!_sttInstance) return '';
   _sttInstance.__wantRunning = false;
   try { _sttInstance.stop(); } catch {}
-  const t = _sttBuffer.join(' ').replace(/\s+/g, ' ').trim();
+  const t = (_sttBuffer.join(' ') + ' ' + _sttInterim).replace(/\s+/g, ' ').trim();
+  console.log('[game][stt] stopSTT transcript:', JSON.stringify(t));
   _sttBuffer = [];
+  _sttInterim = '';
   return t;
 }
 
