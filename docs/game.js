@@ -209,13 +209,31 @@ async function speak(text, voice, { watchInterrupt = false } = {}) {
       // Give the TTS a short head-start before arming interrupt detection —
       // otherwise the player's previous-round trailing interim can trip it.
       const armAt = performance.now() + 600;
+      let tickCount = 0;
       pollId = setInterval(() => {
         if (performance.now() < armAt) return;
+        tickCount++;
+        // Three possible signals for "player is talking right now":
+        //   (a) STT produced a new FINAL transcript since TTS started
+        //   (b) STT interim is different / non-trivially populated
+        //   (c) jawOpen blendshape (driven by upstream audio viseme booster
+        //       from raw mic RMS) is high — works even if Chrome pauses
+        //       SpeechRecognition while TTS is outputting.
+        const jaw = (typeof latestInfluence === 'object' && latestInfluence) ? (latestInfluence.jawOpen || 0) : 0;
         const newFinal = _sttBuffer.length > startBufferLen;
-        const newInterim = _sttInterim && _sttInterim !== startInterim && _sttInterim.trim().length >= 2;
-        if (newFinal || newInterim) {
+        const newInterim = _sttInterim && _sttInterim !== startInterim && _sttInterim.trim().length >= 1;
+        const jawSpeaking = jaw > 0.28;
+        // Log every ~1s so we can see what the poll sees.
+        if (tickCount === 1 || tickCount % 8 === 0) {
+          console.log('[tts-poll] tick', tickCount,
+            'jaw=' + jaw.toFixed(2),
+            'finalDelta=' + (_sttBuffer.length - startBufferLen),
+            'interim=' + JSON.stringify((_sttInterim || '').slice(0, 30)));
+        }
+        if (newFinal || newInterim || jawSpeaking) {
           interrupted = true;
-          console.log('[game][tts] player interrupted — cancelling speech');
+          console.log('[game][tts] INTERRUPTED via',
+            newFinal ? 'stt-final' : newInterim ? 'stt-interim' : 'jawOpen=' + jaw.toFixed(2));
           clearInterval(pollId);
           try { speechSynthesis.cancel(); } catch {}
         }
