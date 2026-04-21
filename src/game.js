@@ -215,8 +215,9 @@ async function speak(text, voice) {
 // routes to Apple. Firefox currently has no implementation and transcript
 // will be empty (graceful fallback: LLM just reads body language).
 let _sttInstance = null;
-let _sttBuffer = [];
-let _sttInterim = '';
+let _sttBuffer = [];           // rolling array of final transcripts
+let _sttInterim = '';           // current interim (uncommitted) text
+let _sttLastActivityAt = 0;     // performance.now() of most recent onresult — used to detect pauses
 function _makeSTT() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) {
@@ -234,6 +235,7 @@ function _makeSTT() {
   r.onspeechstart = () => console.log('[game][stt] onspeechstart');
   r.onspeechend   = () => console.log('[game][stt] onspeechend');
   r.onresult = (ev) => {
+    _sttLastActivityAt = performance.now();
     let interim = '';
     for (let i = ev.resultIndex; i < ev.results.length; i++) {
       const res = ev.results[i];
@@ -340,9 +342,12 @@ function scoreToVibe(score) {
 //
 // Also tracks total talking time so scoring can reward actually speaking
 // over silent-smiling.
-async function collectReactionWindow(onTick, voice) {
+async function collectReactionWindow(onTick, voice, sttStartIndex) {
   const samples = [];
   const jawSamples = [];
+  const SPEECH_SILENCE_END_MS = 1500;
+  // Track whether STT has heard any words since the window opened.
+  const windowStartAt = performance.now();
   let lastTalkingAt = -1;        // performance.now() of most recent "talking" frame
   let firstTalkingAt = -1;        // first time they opened their mouth
   let talkingAccumMs = 0;         // cumulative "talking" time
@@ -375,12 +380,20 @@ async function collectReactionWindow(onTick, voice) {
         lastTalkingAt = now;
       }
 
-      // (a) Early end: employee has been quiet for SILENCE_END_MS.
-      // Grace of 500ms at the start so we don't fire the instant the
-      // question ends (they need time to draw breath).
+      // (a) Early end: the employee has said something AND then paused.
+      // Primary signal: STT — if they've produced transcript and haven't
+      // spoken for SPEECH_SILENCE_END_MS, they're done.
+      const hasSpoken = _sttBuffer.length > (sttStartIndex || 0) || (_sttInterim && _sttInterim.length > 0);
+      const sttQuietFor = _sttLastActivityAt > 0 ? (now - _sttLastActivityAt) : elapsed;
+      if (hasSpoken && sttQuietFor >= SPEECH_SILENCE_END_MS && !interruptFired) {
+        endReason = 'speech-silence';
+        return resolve();
+      }
+      // Secondary fallback: if mic/STT failed entirely (Firefox etc.) and
+      // the player has had their mouth shut for SILENCE_END_MS, still end.
       const silentSince = lastTalkingAt > 0 ? (now - lastTalkingAt) : elapsed;
-      if (elapsed > 500 && silentSince >= SILENCE_END_MS && !interruptFired) {
-        endReason = 'silence';
+      if (!hasSpoken && elapsed > 4000 && silentSince >= SILENCE_END_MS && !interruptFired) {
+        endReason = 'jaw-silence';
         return resolve();
       }
 
@@ -532,6 +545,9 @@ async function runGame() {
     // to be invalidated once webcam starts on Windows.
     setStatus('initialising face capture…');
     await initFaceCapture($('#viewer'), setStatus);
+    // Start STT once and keep it running for the whole game — the round
+    // loop snapshots buffer indices to extract per-round transcripts.
+    startSTT();
     setStatus('initialising LLM…');
     showLoadingOverlay('Loading model…', 'First visit downloads ~1.8 GB. Cached after that.');
     client = await buildClient(state.settings, (msg, pct) => {
@@ -621,14 +637,23 @@ async function runGame() {
     showBubble(topicLine);
     await speak(topicLine, voice);
 
-    startSTT();
+    const sttStartIndex = _sttBuffer.length;
+    const sttStartInterim = _sttInterim;
     showMeter();
     const { samples, yielded, interrupted, talkingSec } = await collectReactionWindow(
       (score, progress) => updateMeter(score, progress),
       voice,
+      sttStartIndex,
     );
     hideMeter();
-    const transcript = stopSTT();
+    // Pull THIS round's transcript out of the rolling buffer (everything new
+    // since the window opened) + whatever's currently interim.
+    const transcript = (
+      _sttBuffer.slice(sttStartIndex).join(' ') +
+      ' ' +
+      (_sttInterim && _sttInterim !== sttStartInterim ? _sttInterim : '')
+    ).replace(/\s+/g, ' ').trim();
+    console.log('[game][round] transcript for this round:', JSON.stringify(transcript));
 
     const s = summarise(samples);
     const multiplier = 4500 + Math.min(i, 10) * 500;
