@@ -62,17 +62,19 @@ Before we move on, can I touch base on your stretch goals for the quarter?`;
 
 const TOPIC_USER_PROMPT = `Ask your employee a new question. Use a corporate buzzword. Do NOT repeat these topics: {past}`;
 
-const FOLLOWUP_USER_PROMPT = `You just had a 1-on-1 exchange with your employee. What you observed:
+const FOLLOWUP_USER_PROMPT = `The employee just answered. Here's what you observed:
+- What they said (verbatim): "{transcript}"
 - Body language / enthusiasm: {vibe}
-- What actually happened: {yield_note}
+- Behaviour details: {yield_note}
 
-React in ONE short sentence, in character as the manager. Do NOT ask a follow-up question — just acknowledge what you observed, in character. Pick a tone from:
+React in ONE short sentence, in character as the manager. Address SOMETHING SPECIFIC from what they actually said (quote a word or idea back at them) and colour it with the body-language context. Do NOT ask a follow-up question — just acknowledge what just happened.
 
-- They yielded immediately when you cut in → glowing gratitude for "active listening" and "respecting everyone's time".
-- They kept talking over your interruption → be POLITELY OFFENDED and gaslight them. Imply THEY were the one who interrupted. "Excuse me, I wasn't quite finished." / "Let's practice active listening here." / "I'd love if we could respect each other's speaking time." NEVER acknowledge that you were the one who actually interrupted first.
-- They said nothing and just smiled silently → acknowledge the silence with passive-aggressive corporate concern. "I see we're taking a moment to reflect." / "Your silence is saying a lot." / "Are we… processing this internally?" You find it deeply unsettling but cover with buzzwords.
-- They gave a short answer and trailed off → faint condescension. "Hmm. I was hoping we'd get a bit more colour on that."
-- They actually answered at some length → treat them well if they also looked enthusiastic; if lukewarm, offer "I appreciate that you're processing this deeply" energy.
+Tone cues:
+- If they said nothing at all → acknowledge the silence: "I see we're taking a moment to reflect", "Your silence is saying a lot", "Are we… processing this internally?"
+- If you interrupted them and they kept talking over you → gaslight them politely. Imply THEY were the one who interrupted. "Excuse me, I wasn't quite finished." "Let's practice active listening here." NEVER acknowledge that you interrupted first.
+- If you interrupted and they yielded → warm gratitude for "active listening" and "respecting everyone's time".
+- If they answered and looked engaged → genuine praise, with a tiny "let's touch base again" upsell.
+- If they answered but looked lukewarm → "I appreciate that you're processing this deeply" faint condescension.
 
 Never use the words "yield", "interrupt", "score", "enthusiasm", "vibe", or any number.`;
 
@@ -203,6 +205,51 @@ async function speak(text, voice) {
     speechSynthesis.cancel();
     speechSynthesis.speak(u);
   });
+}
+
+
+// ---------------- speech-to-text (Web Speech API) ----------------
+// Transcribes the player's answer during the reaction window so the
+// follow-up LLM call can react to content, not just body language.
+// NOTE: Chrome/Edge stream audio to Google for transcription. Safari
+// routes to Apple. Firefox currently has no implementation and transcript
+// will be empty (graceful fallback: LLM just reads body language).
+let _sttInstance = null;
+let _sttBuffer = [];
+function _makeSTT() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return null;
+  const r = new SR();
+  r.continuous = true;
+  r.interimResults = true;
+  r.lang = 'en-US';
+  r.onresult = (ev) => {
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const res = ev.results[i];
+      if (res.isFinal) _sttBuffer.push(res[0].transcript.trim());
+    }
+  };
+  r.onerror = (ev) => { if (ev.error !== 'no-speech' && ev.error !== 'aborted') console.warn('[game][stt]', ev.error); };
+  r.onend = () => {
+    // SR likes to stop itself on silence; restart while we still want it.
+    if (r.__wantRunning) { try { r.start(); } catch {} }
+  };
+  return r;
+}
+function startSTT() {
+  if (!_sttInstance) _sttInstance = _makeSTT();
+  if (!_sttInstance) return;
+  _sttBuffer = [];
+  _sttInstance.__wantRunning = true;
+  try { _sttInstance.start(); } catch {}
+}
+function stopSTT() {
+  if (!_sttInstance) return '';
+  _sttInstance.__wantRunning = false;
+  try { _sttInstance.stop(); } catch {}
+  const t = _sttBuffer.join(' ').replace(/\s+/g, ' ').trim();
+  _sttBuffer = [];
+  return t;
 }
 
 // ---------------- face capture: delegate to upstream startLiveCapture ----------------
@@ -534,12 +581,14 @@ async function runGame() {
     showBubble(topicLine);
     await speak(topicLine, voice);
 
+    startSTT();
     showMeter();
     const { samples, yielded, interrupted, talkingSec } = await collectReactionWindow(
       (score, progress) => updateMeter(score, progress),
       voice,
     );
     hideMeter();
+    const transcript = stopSTT();
 
     const s = summarise(samples);
     const multiplier = 4500 + Math.min(i, 10) * 500;
@@ -573,9 +622,11 @@ async function runGame() {
     }
 
     try {
+      const transcriptForPrompt = transcript || '(nothing — they did not say anything)';
       const raw = await client.complete(
         SYSTEM_PROMPT,
         FOLLOWUP_USER_PROMPT
+          .replace('{transcript}', transcriptForPrompt.replace(/"/g, "'"))
           .replace('{vibe}', scoreToVibe(s.p50))
           .replace('{yield_note}', talkNote),
       );

@@ -24,6 +24,7 @@ Everything runs locally in your browser. No exceptions.
 
 - **Your webcam feed** is analyzed on your GPU by MediaPipe's FaceLandmarker. It never leaves the device. No frames, no video, no blendshape output is transmitted anywhere.
 - **The LLM** (Llama-3.2-3B via WebLLM) runs locally once the weights are cached in your browser. Your prompts and the manager's responses never hit a server.
+- **Speech-to-text is the one exception.** The Web Speech API (Chrome/Edge) briefly streams your mic audio to Google for transcription so the manager can react to what you actually said. No persistent record is kept by this site. If that's a dealbreaker, turn it off in Settings (planned) or use Firefox (which has no STT and will just skip the transcript).
 - **No analytics, no accounts, no logins.** If you record a demo, the file lands in your Downloads folder. Only you have it.
 
 The only outbound traffic is the one-time asset fetch on first load (three.js, MediaPipe model, WebLLM weights, character GLB) from their respective CDNs. After that, you can disconnect wifi and keep playing.
