@@ -222,7 +222,7 @@ async function speak(text, voice, { watchInterrupt = false } = {}) {
         const jaw = (typeof latestInfluence === 'object' && latestInfluence) ? (latestInfluence.jawOpen || 0) : 0;
         const newFinal = _sttBuffer.length > startBufferLen;
         const newInterim = _sttInterim && _sttInterim !== startInterim && _sttInterim.trim().length >= 1;
-        const jawSpeaking = jaw > 0.28;
+        const jawSpeaking = jaw > 0.35;
         // Log every ~1s so we can see what the poll sees.
         if (tickCount === 1 || tickCount % 8 === 0) {
           console.log('[tts-poll] tick', tickCount,
@@ -241,8 +241,18 @@ async function speak(text, voice, { watchInterrupt = false } = {}) {
     }
 
     const cleanup = () => { if (pollId) clearInterval(pollId); };
-    u.onend = () => { cleanup(); resolve({ interrupted }); };
-    u.onerror = () => { cleanup(); resolve({ interrupted }); };
+    const bounceSTT = () => {
+      // Ensure SR is listening again once TTS is out of the way.
+      if (!_sttInstance) return;
+      _sttInstance.__wantRunning = true;
+      try { _sttInstance.stop(); } catch {}
+      setTimeout(() => {
+        try { _sttInstance.start(); console.log('[game][stt] post-speak restart'); }
+        catch (e) { console.log('[game][stt] post-speak restart threw (likely already running):', e.message); }
+      }, 120);
+    };
+    u.onend = () => { cleanup(); bounceSTT(); resolve({ interrupted }); };
+    u.onerror = () => { cleanup(); bounceSTT(); resolve({ interrupted }); };
     try { speechSynthesis.cancel(); } catch {}
     speechSynthesis.speak(u);
   });
